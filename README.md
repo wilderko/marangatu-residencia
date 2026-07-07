@@ -1,6 +1,6 @@
 # marangatu-residencia
 
-**[English](README.md) | [Slovensky](README.sk.md) | [Česky](README.cs.md)**
+**[English](README.md) | [Español](README.es.md) | [Slovensky](README.sk.md) | [Česky](README.cs.md)**
 
 Headless automation of the monthly tax workflow on Paraguay's **Marangatu** portal
 ([marangatu.set.gov.py/eset](https://marangatu.set.gov.py/eset/), the online tax system

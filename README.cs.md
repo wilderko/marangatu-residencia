@@ -1,6 +1,6 @@
 # marangatu-residencia
 
-**[English](README.md) | [Slovensky](README.sk.md) | [Česky](README.cs.md)**
+**[English](README.md) | [Español](README.es.md) | [Slovensky](README.sk.md) | [Česky](README.cs.md)**
 
 Headless automatizace měsíční daňové rutiny na paraguayském portálu **Marangatu**
 ([marangatu.set.gov.py/eset](https://marangatu.set.gov.py/eset/), online daňový systém

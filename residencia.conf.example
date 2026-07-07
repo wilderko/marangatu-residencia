@@ -1,0 +1,44 @@
+# ~/.config/marangatu/residencia.conf
+# Konfigurácia pre marangatu_residencia.py (chmod 600!)
+# Prihlasovacie údaje ostávajú v ~/.config/marangatu/credentials (USUARIO=, PASSWORD=)
+
+# --- e-mail reporty --------------------------------------------------------
+# Kam poslať report po každom behu (screenshoty + boleta v prílohe).
+# Prázdne = e-mail sa neposiela (report ostáva v logu).
+MAIL_TO=you@example.com
+# Odosielateľ — použi adresu, ktorej doména má v SPF zázname IP tvojho servera,
+# inak reporty skončia v spame
+MAIL_FROM=Marangatu bot <bot@example.com>
+SENDMAIL=/usr/sbin/sendmail
+
+# --- suma faktúry ---------------------------------------------------------
+# Minimálny mesačný príjem, ktorý má faktúra preukazovať (Rezolúcia DNM 407/2026
+# očakáva rádovo paraguajskú minimálnu mzdu, ~500-600 USD/mes.)
+MIN_INCOME_USD=600
+# Rezerva na pohyb kurzu — faktúra sa vystaví o 10 % vyššia, aby príjem
+# nikdy nepadol pod minimum ani pri oslabení guaraní
+SAFETY_MARGIN=1.10
+# Pevný kurz Gs/USD. Ak necháš prázdne, stiahne sa aktuálny z open.er-api.com
+FX_RATE_PYG=
+# Záložný kurz, keď API nejde
+FX_RATE_FALLBACK=7500
+
+# --- klient, ktorému sa fakturuje (krok 2 manuálu) ------------------------
+# NO_DOMICILIADO = zahraničná osoba/firma bez paraguajského RUC (napr. LLC)
+# CONTRIBUYENTE  = klient s paraguajským RUC
+CLIENT_SITUACION=NO_DOMICILIADO
+
+# pre CONTRIBUYENTE: RUC bez kontrolnej číslice za pomlčkou
+CLIENT_RUC=
+
+# pre NO_DOMICILIADO:
+CLIENT_ID=EIN-XX-XXXXXXX          # pas alebo tax ID firmy
+CLIENT_ID_TYPE=Identificación Tributaria   # alebo Pasaporte — text zo selectu
+CLIENT_NAME=My Company LLC
+CLIENT_ADDRESS=1234 Main St, Sheridan, WY 82801
+CLIENT_COUNTRY=ESTADOS UNIDOS     # text zo selectu País
+CLIENT_EMAIL=billing@example.com
+CLIENT_PHONE=
+
+# --- popis služby na faktúre ----------------------------------------------
+SERVICE_DESCRIPTION=Servicios de consultoría informática

@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+residencia.conf
+credentials
+logs/
+state/
+documentos/

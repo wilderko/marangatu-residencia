@@ -41,7 +41,7 @@ PARAGUAY"*.
 |--------------|-----------------|-------------|--------------|
 | `facturar`   | ~25th of month  | 1–2         | Issues one virtual invoice for the **current** month to your configured client. Amount = `MIN_INCOME_USD × FX rate × SAFETY_MARGIN`, rounded up to a multiple of 11,000 Gs. Saves a state record used later by `declarar`. |
 | `declarar`   | ~5th of month   | 3–5, 9      | For the **previous** month: imputes the sales vouchers (*ventas a imputar → imputar todo*), files **Form 120** (IVA General, obligation 211) with box 10 = gross/11×10, presents the **Form 241 talón**, and generates the payment slip (*boleta de pago*, attached to the report e-mail). |
-| `documentos` | before applying | 7–8         | Best-effort download of the *certificado de cumplimiento tributario*, *constancia de RUC* and *cédula tributaria* into `~/marangatu/documentos/`. |
+| `documentos` | before applying | 7–8         | Best-effort download of the *certificado de cumplimiento tributario*, *constancia de RUC* and *cédula tributaria* into `~/.local/share/marangatu/documentos/`. |
 
 Paying the IVA itself is **not** automated — you pay the generated boleta in any
 Paraguayan banking app (*Pagar servicios → DNIT*, enter cédula/RUC + date of birth).
@@ -69,10 +69,10 @@ gross = 4,818,000 Gs → base 4,380,000 Gs (box 10), IVA 438,000 Gs ≈ USD 60/m
   (Override with `--amount-gs` only if you are sure the invoice exists.)
 - Before every final *Presentar/Confirmar* click the script waits until the portal has
   computed **exactly** the expected amounts; on any mismatch it aborts without filing.
-- Every step is screenshotted to `~/marangatu/logs/<run>/`; a report (with screenshots
+- Every step is screenshotted to `~/.local/state/marangatu/logs/<run>/`; a report (with screenshots
   and the boleta PDF) is e-mailed after every run.
 - Transient failures are retried 3× with 10-minute pauses; each attempt has a hard
-  40-minute cap. Idempotent state markers (`~/marangatu/state/`) plus
+  40-minute cap. Idempotent state markers (`~/.local/state/marangatu/`) plus
   `--only-if-not-done` make backup cron runs safe.
 
 ## Requirements
@@ -131,7 +131,7 @@ PASSWORD=...
 V=~/marangatu/venv/bin/python
 
 # ALWAYS start with a dry run — does everything except the final confirm clicks,
-# then check the screenshots in ~/marangatu/logs/<run>/
+# then check the screenshots in ~/.local/state/marangatu/logs/<run>/
 $V marangatu_residencia.py facturar --dry-run
 $V marangatu_residencia.py declarar --dry-run
 
@@ -186,12 +186,15 @@ that is a real tax payment, not a fee.
 ## Files
 
 ```
-~/.config/marangatu/credentials       login (chmod 600)
-~/.config/marangatu/residencia.conf   configuration (chmod 600)
-~/marangatu/state/                    per-period markers & invoice records (JSON)
-~/marangatu/logs/<timestamp>_<cmd>_<period>/   run.log + step screenshots
-~/marangatu/documentos/<date>/        downloads from the `documentos` subcommand
+~/.config/marangatu/credentials                             login (chmod 600)
+~/.config/marangatu/residencia.conf                         configuration (chmod 600)
+~/.local/state/marangatu/                                   per-period markers & invoice records (JSON)
+~/.local/state/marangatu/logs/<timestamp>_<cmd>_<period>/   run.log + step screenshots
+~/.local/share/marangatu/documentos/<date>/                 downloads from the `documentos` subcommand
 ```
+
+The script honours `XDG_CONFIG_HOME`, `XDG_STATE_HOME` and `XDG_DATA_HOME`;
+the paths above are the defaults.
 
 ## Troubleshooting & known quirks
 

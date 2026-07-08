@@ -17,7 +17,8 @@ Subpríkazy (poradie v mesačnom cykle):
               s casillou 10 = suma/11×10 (krok 4) → talón Form 241 (krok 5) →
               boleta de pago (krok 9, best-effort; platba ostáva ručná v banke)
   documentos  stiahne certificado de cumplimiento, constancia de RUC a cédulu
-              tributaria (kroky 7-8, best-effort) do ~/marangatu/documentos/
+              tributaria (kroky 7-8, best-effort) do
+              $XDG_DATA_HOME/marangatu/documentos/ (~/.local/share/…)
 
 Bezpečnostné zásady (zdedené z marangatu_declaracion.py):
   - pri zlom hesle sa login NEopakuje (ochrana pred zablokovaním účtu),
@@ -27,7 +28,8 @@ Bezpečnostné zásady (zdedené z marangatu_declaracion.py):
     a pokaziť 3-mesačnú reťaz pre rezidenciu,
   - pred každým finálnym "Presentar/Confirmar" sa overí, že portál dopočítal
     očakávané sumy; pri nezhode sa NIČ nepodáva,
-  - každý krok má screenshot v ~/marangatu/logs/<run>/.
+  - každý krok má screenshot v $XDG_STATE_HOME/marangatu/logs/<run>/
+    (~/.local/state/…).
 
 Použitie:
   marangatu_residencia.py facturar                 # faktúra za aktuálny mesiac
@@ -37,10 +39,14 @@ Použitie:
   marangatu_residencia.py documentos               # stiahnuť podklady k žiadosti
   spoločné: --dry-run --no-email --only-if-not-done --retries N
 
-Konfigurácia:
+Konfigurácia (rešpektuje XDG_CONFIG_HOME, default ~/.config):
   ~/.config/marangatu/credentials       USUARIO= a PASSWORD= (chmod 600)
   ~/.config/marangatu/residencia.conf   klient, suma, kurz, e-mail reporty —
                                         viď residencia.conf.example
+
+Stav a logy (XDG_STATE_HOME, default ~/.local/state):
+  ~/.local/state/marangatu/             markery období + záznamy faktúr (JSON)
+  ~/.local/state/marangatu/logs/        run.log + screenshoty jednotlivých behov
 """
 
 import argparse
@@ -49,6 +55,7 @@ import datetime
 import getpass
 import json
 import math
+import os
 import re
 import signal
 import socket
@@ -61,12 +68,17 @@ from email.message import EmailMessage
 from email.utils import formatdate, make_msgid
 from pathlib import Path
 
-BASE = Path.home() / "marangatu"
-STATE_DIR = BASE / "state"
-LOGS_DIR = BASE / "logs"
-DOCS_DIR = BASE / "documentos"
-CRED_FILE = Path.home() / ".config" / "marangatu" / "credentials"
-CONF_FILE = Path.home() / ".config" / "marangatu" / "residencia.conf"
+def _xdg_dir(env_var: str, default: Path) -> Path:
+    val = os.environ.get(env_var, "")
+    return (Path(val) if val else default) / "marangatu"
+
+CONFIG_DIR = _xdg_dir("XDG_CONFIG_HOME", Path.home() / ".config")
+STATE_DIR = _xdg_dir("XDG_STATE_HOME", Path.home() / ".local" / "state")
+DATA_DIR = _xdg_dir("XDG_DATA_HOME", Path.home() / ".local" / "share")
+LOGS_DIR = STATE_DIR / "logs"
+DOCS_DIR = DATA_DIR / "documentos"
+CRED_FILE = CONFIG_DIR / "credentials"
+CONF_FILE = CONFIG_DIR / "residencia.conf"
 
 PORTAL = "https://marangatu.set.gov.py/eset/"
 
@@ -415,7 +427,7 @@ def login(ctx, page, creds, rep):
     low = text.lower()
     if "contraseña" in low and ("incorrect" in low or "inválid" in low or "no válid" in low):
         raise FatalError("Portál hlási nesprávne prihlasovacie údaje — NEopakujem, "
-                         "aby sa účet nezablokoval. Skontroluj ~/.config/marangatu/credentials.")
+                         f"aby sa účet nezablokoval. Skontroluj {CRED_FILE}.")
     if page.locator("input[placeholder='Usuario']").count() > 0 \
             and page.locator("input[placeholder='Usuario']").first.is_visible():
         raise RuntimeError(f"Prihlásenie sa nepodarilo (stále login stránka). Text: {text[:300]}")

@@ -41,7 +41,7 @@ PARAGUAY"*.
 |--------------|-----------------|---------------|-------------|
 | `facturar`   | ~25. deň mesiaca | 1–2          | Vystaví jednu virtuálnu faktúru za **aktuálny** mesiac na nakonfigurovaného klienta. Suma = `MIN_INCOME_USD × kurz × SAFETY_MARGIN`, zaokrúhlená nahor na násobok 11 000 Gs. Uloží stavový záznam, ktorý neskôr použije `declarar`. |
 | `declarar`   | ~5. deň mesiaca | 3–5, 9        | Za **predchádzajúci** mesiac: imputuje predajné doklady (*ventas a imputar → imputar todo*), podá **Form 120** (IVA General, obligación 211) s casillou 10 = brutto/11×10, podá **talón Form 241** a vygeneruje platobný lístok (*boleta de pago*, príloha reportu). |
-| `documentos` | pred podaním žiadosti | 7–8     | Best-effort stiahnutie *certificado de cumplimiento tributario*, *constancia de RUC* a *cédula tributaria* do `~/marangatu/documentos/`. |
+| `documentos` | pred podaním žiadosti | 7–8     | Best-effort stiahnutie *certificado de cumplimiento tributario*, *constancia de RUC* a *cédula tributaria* do `~/.local/share/marangatu/documentos/`. |
 
 Samotná **platba IVA automatizovaná nie je** — boletu zaplatíte v ľubovoľnej
 paraguajskej bankovej appke (*Pagar servicios → DNIT*, zadať cédulu/RUC + dátum
@@ -69,10 +69,10 @@ brutto = 4 818 000 Gs → základ 4 380 000 Gs (casilla 10), IVA 438 000 Gs ≈ 
   (Obísť sa dá cez `--amount-gs`, len ak ste si istí, že faktúra existuje.)
 - Pred každým finálnym klikom *Presentar/Confirmar* skript čaká, kým portál dopočíta
   **presne** očakávané sumy; pri akejkoľvek nezhode končí bez podania.
-- Každý krok má screenshot v `~/marangatu/logs/<run>/`; po každom behu sa posiela
+- Každý krok má screenshot v `~/.local/state/marangatu/logs/<run>/`; po každom behu sa posiela
   e-mailový report (so screenshotmi a PDF boletou).
 - Prechodné chyby sa opakujú 3× s 10-minútovými pauzami; každý pokus má tvrdý strop
-  40 minút. Idempotentné markery (`~/marangatu/state/`) + `--only-if-not-done` robia
+  40 minút. Idempotentné markery (`~/.local/state/marangatu/`) + `--only-if-not-done` robia
   záložné crony bezpečnými.
 
 ## Požiadavky
@@ -131,7 +131,7 @@ PASSWORD=...
 V=~/marangatu/venv/bin/python
 
 # VŽDY začnite dry-runom — spraví všetko okrem finálnych potvrdzovacích klikov,
-# potom skontrolujte screenshoty v ~/marangatu/logs/<run>/
+# potom skontrolujte screenshoty v ~/.local/state/marangatu/logs/<run>/
 $V marangatu_residencia.py facturar --dry-run
 $V marangatu_residencia.py declarar --dry-run
 
@@ -186,12 +186,15 @@ reálna daň, nie poplatok.
 ## Súbory
 
 ```
-~/.config/marangatu/credentials       prihlásenie (chmod 600)
-~/.config/marangatu/residencia.conf   konfigurácia (chmod 600)
-~/marangatu/state/                    markery období a záznamy faktúr (JSON)
-~/marangatu/logs/<timestamp>_<cmd>_<obdobie>/   run.log + screenshoty krokov
-~/marangatu/documentos/<dátum>/       výstupy subpríkazu documentos
+~/.config/marangatu/credentials                              prihlásenie (chmod 600)
+~/.config/marangatu/residencia.conf                          konfigurácia (chmod 600)
+~/.local/state/marangatu/                                    markery období a záznamy faktúr (JSON)
+~/.local/state/marangatu/logs/<timestamp>_<cmd>_<obdobie>/   run.log + screenshoty krokov
+~/.local/share/marangatu/documentos/<dátum>/                 výstupy subpríkazu documentos
 ```
+
+Skript rešpektuje `XDG_CONFIG_HOME`, `XDG_STATE_HOME` a `XDG_DATA_HOME`;
+cesty vyššie sú predvolené.
 
 ## Riešenie problémov a známe zvláštnosti
 

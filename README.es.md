@@ -43,7 +43,7 @@ RESIDENCIA PERMANENTE EN PARAGUAY»*.
 |--------------|-----------------|------------------|------------|
 | `facturar`   | ~día 25 del mes | 1–2              | Emite una factura virtual del mes **en curso** al cliente configurado. Monto = `MIN_INCOME_USD × tipo de cambio × SAFETY_MARGIN`, redondeado hacia arriba a un múltiplo de 11.000 Gs. Guarda un registro de estado que luego usa `declarar`. |
 | `declarar`   | ~día 5 del mes  | 3–5, 9           | Para el mes **anterior**: imputa los comprobantes de venta (*ventas a imputar → imputar todo*), presenta el **Form 120** (IVA General, obligación 211) con la casilla 10 = monto/11×10, presenta el **talón Form 241** y genera la **boleta de pago** (adjunta al correo de reporte). |
-| `documentos` | antes de la solicitud | 7–8        | Descarga best-effort del *certificado de cumplimiento tributario*, la *constancia de RUC* y la *cédula tributaria* en `~/marangatu/documentos/`. |
+| `documentos` | antes de la solicitud | 7–8        | Descarga best-effort del *certificado de cumplimiento tributario*, la *constancia de RUC* y la *cédula tributaria* en `~/.local/share/marangatu/documentos/`. |
 
 El **pago del IVA no está automatizado** — la boleta generada se paga en cualquier
 aplicación bancaria paraguaya (*Pagar servicios → DNIT*, ingresando cédula/RUC + fecha
@@ -75,10 +75,10 @@ IVA 438.000 Gs ≈ USD 60/mes.
 - Antes de cada clic final en *Presentar/Confirmar*, el script espera hasta que el
   portal haya calculado **exactamente** los montos esperados; ante cualquier
   discrepancia aborta sin presentar nada.
-- Cada paso se captura en pantalla en `~/marangatu/logs/<run>/`; tras cada corrida se
+- Cada paso se captura en pantalla en `~/.local/state/marangatu/logs/<run>/`; tras cada corrida se
   envía un reporte por correo (con capturas y el PDF de la boleta).
 - Los fallos transitorios se reintentan 3× con pausas de 10 minutos; cada intento tiene
-  un tope duro de 40 minutos. Los marcadores idempotentes (`~/marangatu/state/`) más
+  un tope duro de 40 minutos. Los marcadores idempotentes (`~/.local/state/marangatu/`) más
   `--only-if-not-done` hacen seguros los cron de respaldo.
 
 ## Requisitos
@@ -137,7 +137,7 @@ PASSWORD=...
 V=~/marangatu/venv/bin/python
 
 # empiece SIEMPRE con un dry-run — hace todo salvo los clics finales de confirmación;
-# luego revise las capturas en ~/marangatu/logs/<run>/
+# luego revise las capturas en ~/.local/state/marangatu/logs/<run>/
 $V marangatu_residencia.py facturar --dry-run
 $V marangatu_residencia.py declarar --dry-run
 
@@ -193,12 +193,15 @@ defecto) — es un impuesto real, no una comisión.
 ## Archivos
 
 ```
-~/.config/marangatu/credentials       acceso (chmod 600)
-~/.config/marangatu/residencia.conf   configuración (chmod 600)
-~/marangatu/state/                    marcadores por período y registros de facturas (JSON)
-~/marangatu/logs/<timestamp>_<cmd>_<período>/   run.log + capturas de cada paso
-~/marangatu/documentos/<fecha>/       descargas del subcomando documentos
+~/.config/marangatu/credentials                              acceso (chmod 600)
+~/.config/marangatu/residencia.conf                          configuración (chmod 600)
+~/.local/state/marangatu/                                    marcadores por período y registros de facturas (JSON)
+~/.local/state/marangatu/logs/<timestamp>_<cmd>_<período>/   run.log + capturas de cada paso
+~/.local/share/marangatu/documentos/<fecha>/                 descargas del subcomando documentos
 ```
+
+El script respeta `XDG_CONFIG_HOME`, `XDG_STATE_HOME` y `XDG_DATA_HOME`;
+las rutas anteriores son las predeterminadas.
 
 ## Solución de problemas y particularidades conocidas
 

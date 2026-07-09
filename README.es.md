@@ -83,7 +83,7 @@ IVA 438.000 Gs ≈ USD 60/mes.
 
 ## Requisitos
 
-- Servidor Linux capaz de ejecutar Chromium headless (desarrollado en Ubuntu)
+- Servidor Linux capaz de ejecutar un navegador headless — Chromium (por defecto) o Firefox/Gecko (desarrollado en Ubuntu)
 - Python 3.9+ con [Playwright](https://playwright.dev/python/)
 - un **RUC activo** y acceso a Marangatu (número de cédula + contraseña)
 - **timbrado** ya solicitado una vez (paso 1 de la guía — acción manual única en
@@ -97,6 +97,9 @@ mkdir -p ~/marangatu && cd ~/marangatu
 python3 -m venv venv
 venv/bin/pip install playwright
 venv/bin/playwright install --with-deps chromium
+# opcional — para controlar el portal con Firefox (Gecko), instálalo también y
+# selecciónalo con BROWSER=firefox en residencia.conf o con la opción --browser firefox:
+#   venv/bin/playwright install --with-deps firefox
 git clone https://github.com/wilderko/marangatu-residencia.git src
 ln -s src/marangatu_residencia.py .
 ```

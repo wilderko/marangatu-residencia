@@ -77,7 +77,7 @@ gross = 4,818,000 Gs → base 4,380,000 Gs (box 10), IVA 438,000 Gs ≈ USD 60/m
 
 ## Requirements
 
-- Linux host that can run headless Chromium (developed on Ubuntu)
+- Linux host that can run a headless browser — Chromium (default) or Firefox/Gecko (developed on Ubuntu)
 - Python 3.9+ with [Playwright](https://playwright.dev/python/)
 - an **active RUC** and a Marangatu login (cédula number + password)
 - **timbrado** already requested once (guide step 1 — a one-time manual action in
@@ -91,6 +91,9 @@ mkdir -p ~/marangatu && cd ~/marangatu
 python3 -m venv venv
 venv/bin/pip install playwright
 venv/bin/playwright install --with-deps chromium
+# optional — to drive the portal with Firefox (Gecko) instead, install it too and
+# select it via BROWSER=firefox in residencia.conf or the --browser firefox flag:
+#   venv/bin/playwright install --with-deps firefox
 git clone https://github.com/wilderko/marangatu-residencia.git src
 ln -s src/marangatu_residencia.py .
 ```

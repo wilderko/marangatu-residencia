@@ -2,6 +2,13 @@
 # Konfigurácia pre marangatu_residencia.py (chmod 600!)
 # Prihlasovacie údaje ostávajú v ~/.config/marangatu/credentials (USUARIO=, PASSWORD=)
 
+# --- prehliadač -----------------------------------------------------------
+# Engine, cez ktorý sa portál ovláda (Playwright). Default chromium (Blink).
+# firefox (Gecko) je dobrovoľná alternatíva — treba doinštalovať:
+#   venv/bin/playwright install firefox
+# Prebiť sa dá aj ad hoc prepínačom: --browser firefox
+BROWSER=chromium
+
 # --- e-mail reporty --------------------------------------------------------
 # Kam poslať report po každom behu (screenshoty + boleta v prílohe).
 # Prázdne = e-mail sa neposiela (report ostáva v logu).

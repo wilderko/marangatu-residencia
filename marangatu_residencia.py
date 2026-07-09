@@ -38,6 +38,7 @@ Použitie:
   marangatu_residencia.py declarar --month 2026-07
   marangatu_residencia.py documentos               # stiahnuť podklady k žiadosti
   spoločné: --dry-run --no-email --only-if-not-done --retries N
+            --browser chromium|firefox   (engine prehliadača; gecko = firefox)
 
 Konfigurácia (rešpektuje XDG_CONFIG_HOME, default ~/.config):
   ~/.config/marangatu/credentials       USUARIO= a PASSWORD= (chmod 600)
@@ -106,6 +107,7 @@ CONF_DEFAULTS = {
     "CLIENT_EMAIL": "",
     "CLIENT_PHONE": "",
     "SERVICE_DESCRIPTION": "Servicios de consultoría informática",
+    "BROWSER": "chromium",      # engine prehliadača: chromium (Blink) | firefox (Gecko)
 }
 
 
@@ -174,6 +176,48 @@ def format_gs(n: int) -> str:
 
 def factura_state_file(period: str) -> Path:
     return STATE_DIR / f"residencia_factura_{period}.json"
+
+
+# ---------------------------------------------------------------- výber prehliadača
+
+# Portál je čistý web bez CDP-špecifík, takže funguje pod oboma enginmi. Chromium
+# (Blink) ostáva default; Firefox (Gecko) je dobrovoľná alternatíva pre tých, čo
+# nechcú/nemôžu behať Chrome. Jediné Chromium-only miesto je CDP fallback pre
+# screenshoty v shot() — na Firefoxe ticho preskočí a použije page.screenshot().
+BROWSER_ALIASES = {
+    "chromium": "chromium", "chrome": "chromium", "blink": "chromium",
+    "firefox": "firefox", "gecko": "firefox", "ff": "firefox",
+}
+
+
+def resolve_browser(name):
+    """Normalizuje názov engine z konfigurácie/CLI na 'chromium' alebo 'firefox'."""
+    key = (name or "chromium").strip().lower()
+    if key not in BROWSER_ALIASES:
+        raise FatalError(
+            f"neznámy prehliadač '{name}' v BROWSER= / --browser — "
+            "povolené: chromium (Blink) alebo firefox (Gecko)")
+    return BROWSER_ALIASES[key]
+
+
+def launch_context(p, cfg, rep):
+    """Spustí headless prehliadač podľa cfg['BROWSER'] a vráti (browser, context).
+
+    Predtým sa spúšťanie Chromia opakovalo v každom subpríkaze; teraz je na
+    jednom mieste, aby voľba enginu (Chromium/Firefox) platila rovnako pre
+    facturar, declarar aj documentos."""
+    engine = resolve_browser(cfg.get("BROWSER"))
+    if engine == "firefox":
+        rep.log("prehliadač: Firefox (Gecko), headless")
+        # Firefox nemá Chromium sandbox prepínače; --no-sandbox by neprijal
+        browser = p.firefox.launch(headless=True)
+    else:
+        rep.log("prehliadač: Chromium (Blink), headless")
+        browser = p.chromium.launch(
+            headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+    ctx = browser.new_context(viewport={"width": 1400, "height": 1000},
+                              locale="es-PY", accept_downloads=True)
+    return browser, ctx
 
 
 # ---------------------------------------------------------------- playwright helpers
@@ -614,10 +658,7 @@ def cmd_facturar(creds, cfg, rep, args, period):
     gross = compute_gross_gs(cfg, rep, args.amount_gs)
     results = {}
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True,
-                                    args=["--no-sandbox", "--disable-dev-shm-usage"])
-        ctx = browser.new_context(viewport={"width": 1400, "height": 1000},
-                                  locale="es-PY", accept_downloads=True)
+        browser, ctx = launch_context(p, cfg, rep)
         page = ctx.new_page()
         page.set_default_timeout(45000)
         try:
@@ -945,10 +986,7 @@ def cmd_declarar(creds, cfg, rep, args, year, month):
 
     results = {"suma": f"brutto {format_gs(gross)} Gs = báza {format_gs(base)} + IVA {format_gs(iva)}"}
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True,
-                                    args=["--no-sandbox", "--disable-dev-shm-usage"])
-        ctx = browser.new_context(viewport={"width": 1400, "height": 1000},
-                                  locale="es-PY", accept_downloads=True)
+        browser, ctx = launch_context(p, cfg, rep)
         page = ctx.new_page()
         page.set_default_timeout(45000)
         try:
@@ -999,10 +1037,7 @@ def cmd_documentos(creds, cfg, rep, args):
     outdir.mkdir(parents=True, exist_ok=True)
     results = {}
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True,
-                                    args=["--no-sandbox", "--disable-dev-shm-usage"])
-        ctx = browser.new_context(viewport={"width": 1400, "height": 1000},
-                                  locale="es-PY", accept_downloads=True)
+        browser, ctx = launch_context(p, cfg, rep)
         page = ctx.new_page()
         page.set_default_timeout(45000)
         try:
@@ -1120,6 +1155,9 @@ def main():
     ap.add_argument("--amount-gs", type=int,
                     help="brutto suma faktúry v Gs (facturar: namiesto výpočtu z USD; "
                          "declarar: fallback, ak chýba marker faktúry)")
+    ap.add_argument("--browser", choices=["chromium", "firefox", "gecko"],
+                    help="engine prehliadača; prebije BROWSER z residencia.conf "
+                         "(default chromium). gecko = firefox")
     ap.add_argument("--dry-run", action="store_true",
                     help="všetko okrem finálnych Presentar/Confirmar klikov")
     ap.add_argument("--no-email", action="store_true")
@@ -1164,6 +1202,9 @@ def main():
     try:
         creds = load_credentials()
         cfg = load_config()
+        if args.browser:
+            cfg["BROWSER"] = args.browser
+        resolve_browser(cfg.get("BROWSER"))   # over voľbu enginu pred behom
     except FatalError as e:
         print(f"CHYBA: {e}", file=sys.stderr)
         return 1

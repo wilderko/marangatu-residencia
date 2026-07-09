@@ -77,7 +77,7 @@ brutto = 4 818 000 Gs → základ 4 380 000 Gs (casilla 10), IVA 438 000 Gs ≈ 
 
 ## Požiadavky
 
-- Linuxový server schopný behať headless Chromium (vyvíjané na Ubuntu)
+- Linuxový server schopný behať headless prehliadač — Chromium (default) alebo Firefox/Gecko (vyvíjané na Ubuntu)
 - Python 3.9+ s [Playwright](https://playwright.dev/python/)
 - **aktívny RUC** a prihlásenie do Marangatu (číslo céduly + heslo)
 - **timbrado** vyžiadané raz vopred (krok 1 manuálu — jednorazová ručná akcia v
@@ -91,6 +91,9 @@ mkdir -p ~/marangatu && cd ~/marangatu
 python3 -m venv venv
 venv/bin/pip install playwright
 venv/bin/playwright install --with-deps chromium
+# voliteľne — na ovládanie portálu cez Firefox (Gecko) doinštaluj aj jeho a
+# vyber ho cez BROWSER=firefox v residencia.conf alebo prepínačom --browser firefox:
+#   venv/bin/playwright install --with-deps firefox
 git clone https://github.com/wilderko/marangatu-residencia.git src
 ln -s src/marangatu_residencia.py .
 ```

@@ -19,16 +19,44 @@ MAIL_FROM=Marangatu bot <bot@example.com>
 SENDMAIL=/usr/sbin/sendmail
 
 # --- suma faktúry ---------------------------------------------------------
-# Minimálny mesačný príjem, ktorý má faktúra preukazovať (Rezolúcia DNM 407/2026
-# očakáva rádovo paraguajskú minimálnu mzdu, ~500-600 USD/mes.)
+# Manuál: fakturuj "niečo nad minimálnou mzdou". Prah sa porovnáva s bázou
+# (casilla 10 Form 120 = príjem, ktorý vidí DNM). Minimálna mzda 2026:
+MIN_INCOME_GS=3044000
+# Doplnkové minimum v USD — skript berie VYŠŠIE z oboch (0 = nepoužiť)
 MIN_INCOME_USD=600
-# Rezerva na pohyb kurzu — faktúra sa vystaví o 10 % vyššia, aby príjem
-# nikdy nepadol pod minimum ani pri oslabení guaraní
+# Rezerva navrch — faktúra sa vystaví o 10 % vyššia (aj kvôli pohybu kurzu)
 SAFETY_MARGIN=1.10
 # Pevný kurz Gs/USD. Ak necháš prázdne, stiahne sa aktuálny z open.er-api.com
 FX_RATE_PYG=
 # Záložný kurz, keď API nejde
-FX_RATE_FALLBACK=7500
+FX_RATE_FALLBACK=6000
+# S defaultmi a kurzom ~5 990: faktúra 3 960 000 Gs = báza 3 600 000 + IVA 360 000
+
+# --- imputácia: krok Obligaciones (krok 3 manuálu) -------------------------
+# Na zeleno sa prepnú LEN tieto povinnosti (čiarkou oddelené), ostatné na
+# červeno. Bežné RUC pre pobyt má len IVA General. IRP-RSP pridaj iba ak na
+# neho RUC naozaj je registrované (povinné nad 80 000 000 Gs/rok), napr.:
+#   IMPUTAR_OBLIGACIONES=IVA GENERAL,IRP - RSP
+IMPUTAR_OBLIGACIONES=IVA GENERAL
+
+# --- termín podania a platby (krok 4 manuálu) ------------------------------
+# Termín = deň podľa poslednej číslice RUC pred pomlčkou (0→7., 1→9., … 9→25.),
+# víkend/sviatok → ďalší pracovný deň. Prázdne = odvodí sa z USUARIO
+# (pri fyzickej osobe je RUC = číslo cédula).
+RUC=
+# Presunuté sviatky (1. 3., 12. 6., 29. 9. sa presúvajú) a iné dni voľna,
+# ktoré skript nepozná — YYYY-MM-DD oddelené čiarkou
+HOLIDAYS=
+
+# --- Rubro 2 Form 120 (6-mesačný kumulatív) ---------------------------------
+# Casilla 160 = súčet casilla 10 za posledných 6 období vrátane aktuálneho.
+# Skript ich berie zo svojich záznamov; obdobie bez záznamu NEpočíta ako 0,
+# kým mu to nepovieš:
+# prvé obdobie, od ktorého máš IVA (staršie obdobia = 0), napr. 2026-07
+RUC_START=
+# obdobia podané mimo skriptu: YYYY-MM:báza(casilla 10), napr.
+#   PRIOR_SALES_10=2026-05:0,2026-06:3600000
+PRIOR_SALES_10=
 
 # --- klient, ktorému sa fakturuje (krok 2 manuálu) ------------------------
 # NO_DOMICILIADO = zahraničná osoba/firma bez paraguajského RUC (napr. LLC)

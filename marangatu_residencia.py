@@ -11,14 +11,24 @@ neakceptujú.
 
 Subpríkazy (poradie v mesačnom cykle):
   facturar    vystaví virtuálnu faktúru za AKTUÁLNY mesiac (krok 1-2 manuálu);
-              suma = MIN_INCOME_USD × kurz × SAFETY_MARGIN, zaokrúhlená nahor
-              na násobok 11 000 Gs (aby báza aj IVA vyšli v celých guaraní)
-  declarar    za PREDCHÁDZAJÚCI mesiac: imputácia predajov (krok 3) → Form 120
-              s casillou 10 = suma/11×10 (krok 4) → talón Form 241 (krok 5) →
+              suma = max(MIN_INCOME_GS × 11/10, MIN_INCOME_USD × kurz)
+              × SAFETY_MARGIN, zaokrúhlená nahor na násobok 11 000 Gs (aby
+              báza aj IVA vyšli v celých guaraní) — báza (casilla 10) tak
+              vždy leží nad minimálnou mzdou
+  declarar    za PREDCHÁDZAJÚCI mesiac: imputácia predajov vrátane kroku
+              Obligaciones (krok 3: IMPUTAR_OBLIGACIONES zelené, ostatné
+              červené) → Form 120 s Rubro 1 casilla 10 = suma/11×10 a Rubro 2
+              (casilla 160 = súčet casilla 10 za posledných 6 období vrátane
+              aktuálneho; 27 a 31 = 160) (krok 4) → talón Form 241 (krok 5) →
               boleta de pago (krok 9, best-effort; platba ostáva ručná v banke)
-  documentos  stiahne certificado de cumplimiento, constancia de RUC a cédulu
-              tributaria (kroky 7-8, best-effort) do
+              — všetko do termínu podľa poslednej číslice RUC (calendario
+              perpetuo DNIT: 0→7., 1→9., … 9→25., víkend/sviatok → ďalší
+              pracovný deň)
+  documentos  stiahne posledné Form 120, certificado de cumplimiento,
+              constancia de RUC a cédulu tributaria (kroky 6-8, best-effort) do
               $XDG_DATA_HOME/marangatu/documentos/ (~/.local/share/…)
+  vencimiento offline (bez prihlásenia): vypíše termín podania + platby za
+              obdobie podľa poslednej číslice RUC
 
 Bezpečnostné zásady (zdedené z marangatu_declaracion.py):
   - pri zlom hesle sa login NEopakuje (ochrana pred zablokovaním účtu),
@@ -33,12 +43,16 @@ Bezpečnostné zásady (zdedené z marangatu_declaracion.py):
 
 Použitie:
   marangatu_residencia.py facturar                 # faktúra za aktuálny mesiac
-  marangatu_residencia.py facturar --amount-gs 4818000   # pevná suma v Gs
+  marangatu_residencia.py facturar --amount-gs 3960000   # pevná suma v Gs
   marangatu_residencia.py declarar                 # deklarácia za minulý mesiac
   marangatu_residencia.py declarar --month 2026-07
   marangatu_residencia.py documentos               # stiahnuť podklady k žiadosti
+  marangatu_residencia.py vencimiento --month 2026-09   # termín podania/platby
   spoločné: --dry-run --no-email --only-if-not-done --retries N
             --browser chromium|firefox   (engine prehliadača; gecko = firefox)
+            --interactive  viditeľný prehliadač; pred každým nevratným klikom
+                           sa pýta y/N a na obrazovkách, ktoré skript nevie
+                           spoľahlivo obslúžiť, čaká na ručný zásah
 
 Konfigurácia (rešpektuje XDG_CONFIG_HOME, default ~/.config):
   ~/.config/marangatu/credentials       USUARIO= a PASSWORD= (chmod 600)
@@ -93,10 +107,21 @@ CONF_DEFAULTS = {
     "MAIL_TO": "",              # kam poslať report; prázdne = e-mail sa neposiela
     "MAIL_FROM": "Marangatu bot <marangatu@localhost>",
     "SENDMAIL": "/usr/sbin/sendmail",
-    "MIN_INCOME_USD": "600",
+    "MIN_INCOME_GS": "3044000", # minimálna mzda (Gs/mes.) — báza faktúry ju musí prevýšiť
+    "MIN_INCOME_USD": "600",    # doplnkové minimum v USD; berie sa vyššie z oboch
     "SAFETY_MARGIN": "1.10",
     "FX_RATE_PYG": "",          # pevný kurz Gs/USD; prázdne = stiahnuť z API
-    "FX_RATE_FALLBACK": "7500",
+    "FX_RATE_FALLBACK": "6000",
+    # krok 3 manuálu — Obligaciones asociadas: na zeleno LEN povinnosti, ktoré
+    # RUC naozaj má (čiarkou oddelené); ostatné sa prepnú na červeno
+    "IMPUTAR_OBLIGACIONES": "IVA GENERAL",
+    # krok 4 — termín podľa poslednej číslice RUC pred pomlčkou;
+    # prázdne = odvodí sa z USUARIO (pri fyzickej osobe RUC = číslo cédula)
+    "RUC": "",
+    "HOLIDAYS": "",             # ďalšie neštátne/presunuté sviatky YYYY-MM-DD,…
+    # Rubro 2 Form 120 — 6-mesačná história casilla 10
+    "RUC_START": "",            # YYYY-MM: prvé obdobie s IVA; staršie = 0
+    "PRIOR_SALES_10": "",       # YYYY-MM:báza,… pre obdobia bez záznamu skriptu
     "CLIENT_SITUACION": "NO_DOMICILIADO",   # alebo CONTRIBUYENTE
     "CLIENT_RUC": "",           # pre CONTRIBUYENTE: číslice pred pomlčkou
     "CLIENT_ID": "",            # pre NO_DOMICILIADO: pas alebo tax ID
@@ -113,6 +138,34 @@ CONF_DEFAULTS = {
 
 class FatalError(Exception):
     """Chyba, pri ktorej nemá zmysel opakovať (zlé heslo, chýbajúca faktúra…)."""
+
+
+# --interactive: viditeľný prehliadač + y/N pred nevratnými klikmi + ručný
+# zásah na obrazovkách, ktoré skript nevie spoľahlivo obslúžiť (nastaví main)
+INTERACTIVE = False
+
+
+def confirm_irreversible(rep, what):
+    """V --interactive režime sa pred nevratným klikom opýta y/N."""
+    if not INTERACTIVE:
+        return
+    rep.log(f"čakám na potvrdenie: {what}")
+    ans = input(f"\n>>> {what} — pokračovať? [y/N] ").strip().lower()
+    if ans not in ("y", "yes", "a", "ano", "áno", "s", "si", "sí"):
+        raise FatalError(f"zrušené používateľom pred krokom: {what}")
+
+
+def manual_step(rep, msg):
+    """Fallback pre obrazovky, ktoré skript nevie spoľahlivo obslúžiť.
+    --interactive: počká, kým to človek urobí vo viditeľnom okne prehliadača.
+    Inak: FatalError (bez opakovania) — NIČ sa nepotvrdzuje naslepo."""
+    if INTERACTIVE and sys.stdin.isatty():
+        rep.log(f"RUČNÝ ZÁSAH: {msg}", report=True)
+        input(f"\n>>> RUČNÝ ZÁSAH: {msg}\n>>> urob to v okne prehliadača a stlač Enter… ")
+        return
+    raise FatalError(f"{msg} — skript to nevie spoľahlivo urobiť sám, NIČ som "
+                     "nepotvrdil. Spusti ručne s --interactive (viditeľný prehliadač) "
+                     "alebo krok urob v portáli ručne.")
 
 
 # ---------------------------------------------------------------- infra
@@ -138,13 +191,17 @@ class Reporter:
             self.attachments.append(Path(path))
 
 
-def load_kv_file(path: Path):
+def load_kv_file(path: Path, strip_comments=False):
     data = {}
     if path.exists():
         for raw in path.read_text(encoding="utf-8").splitlines():
             raw = raw.strip()
             if raw and not raw.startswith("#") and "=" in raw:
                 k, v = raw.split("=", 1)
+                if strip_comments:
+                    # inline komentár "KEY=hodnota   # poznámka" (viď .example);
+                    # NIE pre credentials — heslo môže obsahovať " #"
+                    v = re.sub(r"\s+#.*$", "", v)
                 data[k.strip().upper()] = v.strip()
     return data
 
@@ -158,7 +215,7 @@ def load_credentials():
 
 def load_config():
     cfg = dict(CONF_DEFAULTS)
-    cfg.update(load_kv_file(CONF_FILE))
+    cfg.update(load_kv_file(CONF_FILE, strip_comments=True))
     return cfg
 
 
@@ -174,8 +231,154 @@ def format_gs(n: int) -> str:
     return f"{int(n):,}".replace(",", ".")
 
 
+def parse_gs(text) -> int:
+    """'5.454.545' / '5454545' / '' → int (guaraní nemajú desatinné miesta)."""
+    digits = re.sub(r"\D", "", str(text or ""))
+    return int(digits) if digits else 0
+
+
 def factura_state_file(period: str) -> Path:
     return STATE_DIR / f"residencia_factura_{period}.json"
+
+
+def form120_state_file(period: str) -> Path:
+    return STATE_DIR / f"residencia_form120_{period}.json"
+
+
+def shift_month(year, month, delta):
+    idx = year * 12 + (month - 1) + delta
+    return idx // 12, idx % 12 + 1
+
+
+# ---------------------------------------------------------------- termín (calendario perpetuo)
+
+# DNIT calendario perpetuo (RG 38/2020): priznanie AJ platba za mesiac sú
+# splatné v nasledujúcom mesiaci v deň daný poslednou číslicou RUC pred
+# pomlčkou (kontrolná číslica DV sa nepočíta); víkend/sviatok → ďalší pracovný deň
+DUE_DAY_BY_DIGIT = {0: 7, 1: 9, 2: 11, 3: 13, 4: 15, 5: 17, 6: 19, 7: 21, 8: 23, 9: 25}
+
+
+def easter_sunday(year):
+    """Gregoriánska Veľká noc (anonymný algoritmus Meeus/Jones/Butcher)."""
+    a = year % 19
+    b, c = divmod(year, 100)
+    d, e = divmod(b, 4)
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = divmod(c, 4)
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    day = (h + l - 7 * m + 114) % 31 + 1
+    return datetime.date(year, month, day)
+
+
+def py_holidays(year, extra=""):
+    """Paraguajské sviatky s PEVNÝM dátumom + Zelený štvrtok/Veľký piatok.
+    Presúvateľné sviatky (1. 3., 12. 6., 29. 9.) sa každý rok presúvajú zákonom,
+    preto tu NIE SÚ — doplň ich cez HOLIDAYS=. Chýbajúci sviatok dá skorší
+    (teda bezpečnejší) termín, nikdy neskorší."""
+    easter = easter_sunday(year)
+    days = {datetime.date(year, m, d) for m, d in
+            ((1, 1), (5, 1), (5, 14), (5, 15), (8, 15), (12, 8), (12, 25))}
+    days |= {easter - datetime.timedelta(days=3), easter - datetime.timedelta(days=2)}
+    for raw in (extra or "").replace(";", ",").split(","):
+        raw = raw.strip()
+        if raw:
+            try:
+                days.add(datetime.date.fromisoformat(raw))
+            except ValueError:
+                raise FatalError(f"HOLIDAYS: neplatný dátum '{raw}' (formát YYYY-MM-DD)")
+    return days
+
+
+def taxpayer_ruc(cfg, creds=None):
+    """RUC poplatníka bez DV: RUC= z residencia.conf, inak USUARIO (cédula)."""
+    raw = (cfg.get("RUC") or (creds or {}).get("USUARIO") or "").strip()
+    digits = re.sub(r"\D", "", raw.split("-")[0])
+    if not digits:
+        raise FatalError("Nepoznám RUC — nastav RUC= v residencia.conf "
+                         "(alebo USUARIO= v credentials)")
+    return digits
+
+
+def due_date(year, month, ruc_digits, extra_holidays=""):
+    """Termín podania Form 120 a zaplatenia IVA za obdobie year-month."""
+    digit = int(ruc_digits[-1])
+    ny, nm = shift_month(year, month, 1)
+    d = datetime.date(ny, nm, DUE_DAY_BY_DIGIT[digit])
+    hol = py_holidays(ny, extra_holidays)
+    while d.weekday() >= 5 or d in hol:
+        d += datetime.timedelta(days=1)
+    return d
+
+
+# ---------------------------------------------------------------- Rubro 2 (6-mesačná história)
+
+def parse_prior_sales(raw):
+    out = {}
+    for item in (raw or "").replace(";", ",").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        m = re.fullmatch(r"(\d{4})-(\d{1,2})\s*[:=]\s*([\d.\s]+)", item)
+        if not m:
+            raise FatalError(f"PRIOR_SALES_10: neplatná položka '{item}' "
+                             "(formát YYYY-MM:báza, napr. 2026-05:3600000)")
+        out[f"{int(m.group(1))}-{int(m.group(2)):02d}"] = parse_gs(m.group(3))
+    return out
+
+
+def casilla10_of_period(period, prior):
+    """Báza (casilla 10) obdobia: podané Form 120 > faktúra skriptu > PRIOR_SALES_10."""
+    f = form120_state_file(period)
+    if f.exists():
+        return int(json.loads(f.read_text(encoding="utf-8"))["c10"]), "Form 120 záznam"
+    f = factura_state_file(period)
+    if f.exists():
+        st = json.loads(f.read_text(encoding="utf-8"))
+        gross = int(st["gross_gs"])
+        return int(st.get("base_gs") or gross - gross // 11), "záznam faktúry"
+    if period in prior:
+        return prior[period], "PRIOR_SALES_10"
+    return None, None
+
+
+def compute_rubro2(cfg, year, month, base, rep, dry_run):
+    """Casilla 160 = súčet čistých 10 % predajov (casilla 10) za posledných 6
+    období VRÁTANE deklarovaného (Instructivo Form 120 v4; vypĺňa poplatník).
+    V prvom priznaní 160 = 10. Obdobie bez záznamu sa NEhádže na 0 — nulu
+    pripustí len pred RUC_START alebo explicitne cez PRIOR_SALES_10."""
+    prior = parse_prior_sales(cfg.get("PRIOR_SALES_10"))
+    start = (cfg.get("RUC_START") or "").strip()
+    if start and not re.fullmatch(r"\d{4}-\d{2}", start):
+        raise FatalError(f"RUC_START='{start}' — formát YYYY-MM")
+    parts = [(f"{year}-{month:02d}", base, "aktuálne obdobie")]
+    missing = []
+    for back in range(1, 6):
+        y, m = shift_month(year, month, -back)
+        period = f"{y}-{m:02d}"
+        val, src = casilla10_of_period(period, prior)
+        if val is None:
+            if start and period < start:
+                val, src = 0, "pred RUC_START"
+            else:
+                missing.append(period)
+                val, src = 0, "CHÝBA záznam"
+        parts.append((period, val, src))
+    total = sum(v for _, v, _ in parts)
+    detail = ", ".join(f"{p}={format_gs(v)} ({s})" for p, v, s in parts)
+    rep.log(f"Rubro 2 casilla 160 = {format_gs(total)} Gs  [{detail}]", report=True)
+    if missing:
+        msg = (f"Rubro 2: pre obdobia {', '.join(missing)} nemám casillu 10 (žiadna faktúra/"
+               "Form 120 zo skriptu). Nastav RUC_START=YYYY-MM (obdobia pred ním sa rátajú "
+               "ako 0) alebo PRIOR_SALES_10=YYYY-MM:báza,… (aj ':0' pri nulovom mesiaci).")
+        if dry_run:
+            rep.log("DRY-RUN — " + msg + " Počítam ich ako 0.", report=True)
+        else:
+            raise FatalError(msg + " Odhadom do čestného vyhlásenia NIČ nepodávam.")
+    return total
 
 
 # ---------------------------------------------------------------- výber prehliadača
@@ -207,14 +410,16 @@ def launch_context(p, cfg, rep):
     jednom mieste, aby voľba enginu (Chromium/Firefox) platila rovnako pre
     facturar, declarar aj documentos."""
     engine = resolve_browser(cfg.get("BROWSER"))
+    headless = not INTERACTIVE      # --interactive = viditeľné okno pre ručné zásahy
+    mode = "headless" if headless else "viditeľné okno (--interactive)"
     if engine == "firefox":
-        rep.log("prehliadač: Firefox (Gecko), headless")
+        rep.log(f"prehliadač: Firefox (Gecko), {mode}")
         # Firefox nemá Chromium sandbox prepínače; --no-sandbox by neprijal
-        browser = p.firefox.launch(headless=True)
+        browser = p.firefox.launch(headless=headless)
     else:
-        rep.log("prehliadač: Chromium (Blink), headless")
+        rep.log(f"prehliadač: Chromium (Blink), {mode}")
         browser = p.chromium.launch(
-            headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+            headless=headless, args=["--no-sandbox", "--disable-dev-shm-usage"])
     ctx = browser.new_context(viewport={"width": 1400, "height": 1000},
                               locale="es-PY", accept_downloads=True)
     return browser, ctx
@@ -291,6 +496,34 @@ def select_option_containing(page, selector_locator, text, rep, label):
             rep.log(f"{label}: vybraté '{o['text']}' (value={o['value']})")
             return
     raise RuntimeError(f"{label}: option obsahujúca '{text}' neexistuje. Možnosti: {options}")
+
+
+MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
+         "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+
+
+def select_month(page, selector_locator, month, rep, label):
+    """Vyberie mesiac v selecte, ktorý môže mať value 5/05 a text 'Mayo'/'05'.
+    Na rozdiel od select_option_containing nechytí '1' v '10'/'11'/'12'."""
+    loc = selector_locator
+    loc.wait_for(state="visible", timeout=20000)
+    options = loc.evaluate(
+        "el => Array.from(el.options).map(o => ({value: o.value, text: o.textContent.trim()}))")
+    name = MESES[month - 1]
+    for o in options:
+        val_ok = o["value"].strip().isdigit() and int(o["value"]) == month
+        txt = o["text"].lower()
+        txt_ok = name in txt or re.fullmatch(rf"0?{month}\b.*", txt) is not None
+        if val_ok or txt_ok:
+            loc.select_option(value=o["value"])
+            rep.log(f"{label}: vybraté '{o['text']}' (value={o['value']})")
+            return
+    raise RuntimeError(f"{label}: mesiac {month} neexistuje. Možnosti: {options}")
+
+
+def norm_tax(text):
+    """'IRP – RSP' / 'IRP-RSP' / 'iva general' → 'IRPRSP' / 'IVAGENERAL'."""
+    return re.sub(r"[^A-Z0-9]", "", (text or "").upper())
 
 
 def click_any(page, selectors, timeout=15000):
@@ -500,7 +733,7 @@ def get_fx_rate(cfg, rep):
         return rate, FX_URL
     except Exception as e:
         rep.log(f"kurz sa nepodarilo stiahnuť ({e}) — používam FX_RATE_FALLBACK")
-        return float(cfg.get("FX_RATE_FALLBACK", "7500")), "FX_RATE_FALLBACK"
+        return float(cfg.get("FX_RATE_FALLBACK", "6000")), "FX_RATE_FALLBACK"
 
 
 def compute_gross_gs(cfg, rep, override=None):
@@ -511,14 +744,36 @@ def compute_gross_gs(cfg, rep, override=None):
         if gross % 11:
             gross = (gross // 11 + 1) * 11
         rep.log(f"suma faktúry zadaná ručne: {format_gs(gross)} Gs", report=True)
+        min_gs = parse_gs(cfg.get("MIN_INCOME_GS") or "0")
+        if min_gs and gross - gross // 11 <= min_gs:
+            rep.log(f"POZOR: báza {format_gs(gross - gross // 11)} Gs nie je nad minimálnou "
+                    f"mzdou {format_gs(min_gs)} Gs — manuál odporúča fakturovať nad ňou",
+                    report=True)
         return gross
-    usd = float(cfg.get("MIN_INCOME_USD", "600"))
+    # Manuál: fakturovať "niečo nad minimálnou mzdou (₲3 044 000 mesačne)".
+    # Prah sa porovnáva s BÁZOU (casilla 10 = príjem, ktorý DNM vidí), preto
+    # hrubá suma ≥ MIN_INCOME_GS × 11/10. MIN_INCOME_USD ostáva ako druhé
+    # minimum (spätná kompatibilita) — berie sa vyššie z oboch.
+    min_gs = parse_gs(cfg.get("MIN_INCOME_GS") or "0")
+    usd = float(cfg.get("MIN_INCOME_USD") or "0")
     margin = float(cfg.get("SAFETY_MARGIN", "1.10"))
-    rate, src = get_fx_rate(cfg, rep)
-    raw = usd * rate * margin
+    floor_gs = min_gs * 11 / 10
+    floor_usd, rate, src = 0.0, None, None
+    if usd > 0:
+        rate, src = get_fx_rate(cfg, rep)
+        floor_usd = usd * rate
+    if floor_gs <= 0 and floor_usd <= 0:
+        raise FatalError("residencia.conf: nastav MIN_INCOME_GS (alebo MIN_INCOME_USD)")
+    raw = max(floor_gs, floor_usd) * margin
     gross = int(math.ceil(raw / 11000) * 11000)
-    rep.log(f"suma faktúry: {usd:.0f} USD × {rate:,.0f} Gs/USD × {margin} rezerva "
-            f"= {raw:,.0f} → {format_gs(gross)} Gs (kurz: {src})", report=True)
+    usd_txt = (f"{usd:.0f} USD × {rate:,.0f} Gs/USD = {floor_usd:,.0f} (kurz: {src})"
+               if usd > 0 else "MIN_INCOME_USD nepoužité")
+    rep.log(f"suma faktúry: max(min. mzda {format_gs(min_gs)} × 11/10 = {floor_gs:,.0f}; "
+            f"{usd_txt}) × {margin} rezerva = {raw:,.0f} → {format_gs(gross)} Gs "
+            f"(báza {format_gs(gross - gross // 11)}, IVA {format_gs(gross // 11)})", report=True)
+    if min_gs and gross - gross // 11 <= min_gs:
+        raise FatalError(f"báza {format_gs(gross - gross // 11)} Gs nie je nad minimálnou "
+                         f"mzdou {format_gs(min_gs)} Gs — zvýš SAFETY_MARGIN")
     return gross
 
 
@@ -533,6 +788,15 @@ def emitir_factura(ctx, page, cfg, gross, rep, dry_run):
     win = open_menu_window_any(ctx, page, "EMITIR FACTURA", "EMITIR FACTURA VIRTUAL", rep)
     time.sleep(3)
     shot(ctx, win, rep, "10_factura_formular")
+    # krok 1 manuálu (timbrado) je jednorazový a ručný — ak chýba, portál
+    # faktúru nedovolí; povedz to zrozumiteľne namiesto hľadania selektorov
+    low = body_text(win).lower()
+    if "timbrado" in low and re.search(r"no (posee|cuenta|tiene|existe)|sin timbrado|"
+                                       r"no se encontr|debe solicitar", low):
+        raise FatalError("Portál hlási, že nemáš aktívny timbrado — najprv ho raz ručne "
+                         "vyžiadaj (manuál krok 1: FACTURACIÓN Y TIMBRADO / SOLICITUDES / "
+                         "COMPROBANTES VIRTUALES / FACTURA VIRTUAL → AUTORIZACIÓN Y TIMBRADO, "
+                         "puntos solicitados = 1). Over screenshot 10.")
 
     situ = cfg["CLIENT_SITUACION"].upper()
     sel_situ = control_by_label(win, "Situación", "select", timeout_each=15000)
@@ -634,6 +898,7 @@ def emitir_factura(ctx, page, cfg, gross, rep, dry_run):
         return {"status": "DRY-RUN (nevystavená)", "gross_gs": gross,
                 "base_gs": base, "iva_gs": iva, "numero": None}
 
+    confirm_irreversible(rep, f"vystaviť faktúru na {format_gs(gross)} Gs")
     click_any(win, ["button:has-text('Confirmar')", "button:has-text('Emitir')",
                     "text=Confirmar", "button:has-text('ACEPTAR')"])
     time.sleep(2)
@@ -684,10 +949,149 @@ def cmd_facturar(creds, cfg, rep, args, period):
 
 # ---------------------------------------------------------------- DECLARAR
 
-def imputar_ventas(ctx, page, year, month, gross, rep, dry_run):
-    """Krok 3 manuálu: Ventas a Imputar → imputar todo → siguiente → confirmar."""
+# ---- Obligaciones asociadas (krok 3 manuálu, doplnený 09/2026) -------------
+# Prepínače v stĺpci "Imputado a" nemáme overené na živom DOM (poznáme ich len
+# zo screenshotu klienta) — preto čítanie stavu skúša checkbox, aria-checked aj
+# CSS triedy a po každom kliku sa stav znova overí. Keď sa nedá spoľahlivo
+# prečítať/nastaviť, ide sa cez manual_step (nikdy naslepo).
+
+SWITCH_SELECTORS = ("input[type='checkbox']", "[role='switch']", "[aria-checked]",
+                    "[class*='switch']", "[class*='toggle']", "label", "span")
+
+
+def obligaciones_rows(win):
+    """Riadky tabuľky OBLIGACIONES ASOCIADAS: [(názov dane, tr locator)]."""
+    rows = []
+    trs = win.locator("xpath=//tr[td][.//*[self::input[@type='checkbox'] or @role='switch' "
+                      "or @aria-checked or contains(@class,'switch') or contains(@class,'toggle')]]")
+    for i in range(trs.count()):
+        tr = trs.nth(i)
+        try:
+            if not tr.is_visible():
+                continue
+            name = tr.locator("td").first.inner_text(timeout=3000)
+        except Exception:
+            continue
+        name = " ".join(name.split())
+        if re.search(r"\b(IVA|IRP|IRE|IDU|ISC|RSP|IMPUESTO)", name.upper()):
+            rows.append((name, tr))
+    return rows
+
+
+def switch_state(tr):
+    """True = zelené (imputovať), False = červené, None = nevieme prečítať."""
+    cb = tr.locator("input[type='checkbox']")
+    if cb.count():
+        try:
+            return cb.first.is_checked()
+        except Exception:
+            pass
+    aria = tr.locator("[aria-checked]")
+    if aria.count():
+        v = (aria.first.get_attribute("aria-checked") or "").lower()
+        if v in ("true", "false"):
+            return v == "true"
+    sw = tr.locator("[class*='switch'], [class*='toggle']")
+    for i in range(sw.count()):
+        cls = (sw.nth(i).get_attribute("class") or "").lower()
+        if re.search(r"\b(on|active|checked|is-checked|switch-on|toggle-on)\b", cls):
+            return True
+        if re.search(r"\b(off|switch-off|toggle-off)\b", cls):
+            return False
+    return None
+
+
+def click_switch(tr):
+    """Klikne na viditeľný prepínač v poslednej bunke riadku."""
+    cell = tr.locator("td").last
+    for sel in ("[role='switch']", "[class*='switch']", "[class*='toggle']", "label",
+                "input[type='checkbox']", "span"):
+        loc = cell.locator(sel)
+        for i in range(loc.count()):
+            el = loc.nth(i)
+            try:
+                if el.is_visible():
+                    el.click(timeout=5000)
+                    return True
+            except Exception:
+                continue
+    try:
+        if cell.is_visible():
+            cell.click(timeout=5000)
+            return True
+    except Exception:
+        pass
+    cb = tr.locator("input[type='checkbox']")
+    if cb.count():
+        try:
+            cb.first.click(force=True, timeout=5000)
+            return True
+        except Exception:
+            pass
+    return False
+
+
+def set_obligaciones(ctx, win, wanted, rep):
+    """Na zeleno LEN dane z `wanted` (IMPUTAR_OBLIGACIONES), ostatné na červeno.
+    Imputácia k dani, na ktorú RUC nie je registrované (alebo ktorá nebola
+    aktívna v deň faktúry), skončí ako inconsistencia v Herramientas →
+    Consulta de Estado de Procesos de Imputación — a 'No imputar' tu nie je."""
+    want = {norm_tax(w) for w in wanted if w.strip()}
+    rows = obligaciones_rows(win)
+    shot(ctx, win, rep, "24_obligaciones_pred")
+    if not rows:
+        manual_step(rep, "Nenašiel som tabuľku OBLIGACIONES ASOCIADAS s prepínačmi — "
+                         f"prepni na zeleno LEN {', '.join(wanted)}, ostatné na červeno "
+                         "(NEklikaj Procesar Imputación)")
+        return "nastavené ručne (--interactive)"
+    names = [n for n, _ in rows]
+    rep.log(f"obligaciones asociadas v portáli: {names}")
+    missing = want - {norm_tax(n) for n in names}
+    if missing:
+        raise FatalError(f"Obligaciones: portál neponúka {sorted(missing)} (ponúka {names}). "
+                         "Má tvoje RUC naozaj tieto povinnosti? Skontroluj IMPUTAR_OBLIGACIONES "
+                         "a Constancia de RUC. NIČ neimputujem.")
+    for name, tr in rows:
+        target = norm_tax(name) in want
+        state = switch_state(tr)
+        if state is None:
+            manual_step(rep, f"Neviem prečítať stav prepínača '{name}' — nastav ho na "
+                             f"{'ZELENÉ' if target else 'ČERVENÉ'}")
+            continue
+        if state != target:
+            if not click_switch(tr):
+                manual_step(rep, f"Nepodarilo sa kliknúť na prepínač '{name}' — nastav ho na "
+                                 f"{'ZELENÉ' if target else 'ČERVENÉ'}")
+                continue
+            time.sleep(1)
+            state = switch_state(tr)
+            if state != target:
+                manual_step(rep, f"Prepínač '{name}' po kliku nie je "
+                                 f"{'ZELENÝ' if target else 'ČERVENÝ'} — oprav ho")
+                continue
+        rep.log(f"obligación {name}: {'ZELENÉ (imputar)' if target else 'červené'}")
+    # záverečná kontrola celej tabuľky
+    final = {n: switch_state(tr) for n, tr in obligaciones_rows(win)}
+    wrong = [n for n, st in final.items() if st is not None and st != (norm_tax(n) in want)]
+    rep.attach(shot(ctx, win, rep, "25_obligaciones_nastavene"))
+    if wrong:
+        raise FatalError(f"Obligaciones: prepínače {wrong} nie sú v želanom stave — "
+                         "NIČ neimputujem, over screenshot 25.")
+    summary = ", ".join(f"{n}={'ON' if st else ('off' if st is False else '?')}"
+                        for n, st in final.items())
+    rep.log(f"obligaciones: {summary}", report=True)
+    return summary
+
+
+def imputar_ventas(ctx, page, year, month, gross, cfg, rep, dry_run):
+    """Krok 3 manuálu: Ventas a Imputar → rok/mesiac → Imputar todo → Siguiente
+    → Imputar comprobantes → Obligaciones (IMPUTAR_OBLIGACIONES zelené, ostatné
+    červené) → Procesar Imputación → potvrdiť. Imputácia priznanie NEvyplní —
+    sumy do Form 120 zapisuje submit_form_120."""
     rep.log(f"imputácia predajov: obdobie {month:02d}/{year}")
     marker = STATE_DIR / f"residencia_imputado_{year}-{month:02d}.done"
+    wanted = [w.strip() for w in (cfg.get("IMPUTAR_OBLIGACIONES") or "IVA GENERAL").split(",")
+              if w.strip()]
 
     gcv = open_window_via_menu(ctx, page, "comprobante",
                                "GESTION DE COMPROBANTES INFORMATIVOS",
@@ -716,7 +1120,7 @@ def imputar_ventas(ctx, page, year, month, gross, rep, dry_run):
             raise RuntimeError("Nenašiel som selecty rok/mesiac na 'Ventas a Imputar'")
     select_option_containing(win, sel_year, str(year), rep, "rok(imputácia)")
     time.sleep(1.5)
-    select_option_containing(win, sel_month, str(month), rep, "mesiac(imputácia)")
+    select_month(win, sel_month, month, rep, "mesiac(imputácia)")
     time.sleep(3)
     ttext = body_text(win)
     shot(ctx, win, rep, "22_imputacia_zoznam")
@@ -737,29 +1141,139 @@ def imputar_ventas(ctx, page, year, month, gross, rep, dry_run):
     ttext = body_text(win)
     shot(ctx, win, rep, "23_imputacia_suhrn")
 
-    # kontrola súčtu: v súhrne musí figurovať suma >= naša faktúra
+    # kontrola: súhrn ukazuje sumy alebo aspoň počet dokladov na imputovanie
     nums = [int(x.replace(".", "")) for x in re.findall(r"\b\d{1,3}(?:\.\d{3})+\b", ttext)]
-    if not nums or max(nums) < gross:
+    count = re.search(r"\b(\d+)\s+(?:comprobantes?|documentos?|registros?)\b", ttext, re.I)
+    if nums and max(nums) >= gross:
+        check = f"súčet {format_gs(max(nums))} Gs"
+    elif not nums and count and int(count.group(1)) >= 1:
+        check = f"{count.group(1)} doklad(y)"
+    else:
         raise RuntimeError(f"Súhrn imputácie neobsahuje očakávanú sumu {format_gs(gross)} Gs "
                            f"(nájdené: {[format_gs(n) for n in sorted(set(nums))[-5:]]}) — "
                            "NIČ nepotvrdzujem, over screenshot 23.")
-    if dry_run:
-        rep.log("DRY-RUN: preskakujem potvrdenie imputácie", report=True)
-        return "DRY-RUN (nepotvrdené)"
+    rep.log(f"súhrn imputácie: {check}")
 
-    click_any(win, ["button:has-text('Confirmar')", "button:has-text('Finalizar')",
-                    "text=Confirmar", "button:has-text('ACEPTAR')"])
-    time.sleep(2)
+    # 'Imputar comprobantes' je krok sprievodcu (Inicio → Comprobantes →
+    # Obligaciones → Finalización); spracuje sa až 'Procesar Imputación'
+    click_any(win, ["button:has-text('Imputar comprobantes')", "text=Imputar comprobantes",
+                    "text=Imputar Comprobantes"])
+    time.sleep(3)
     dismiss_pico_modal(win, rep, "ACEPTAR")
-    rep.attach(shot(ctx, win, rep, "24_imputacia_vysledok"))
+    if not wait_for_text(win, ["Imputado a", "OBLIGACIONES ASOCIADAS", "Obligaciones asociadas"],
+                         timeout_s=40):
+        shot(ctx, win, rep, "24x_obligaciones_nezobrazene")
+        manual_step(rep, "Po 'Imputar comprobantes' sa nezobrazil krok Obligaciones — "
+                         "prejdi naň ručne (NEklikaj Procesar Imputación)")
+    obl = set_obligaciones(ctx, win, wanted, rep)
+
+    if dry_run:
+        rep.log("DRY-RUN: preskakujem 'Procesar Imputación'", report=True)
+        return f"DRY-RUN (nepotvrdené; {check}; {obl})"
+
+    confirm_irreversible(rep, f"Procesar Imputación {month:02d}/{year} ({obl})")
+    click_any(win, ["button:has-text('Procesar Imputación')", "button:has-text('Procesar')",
+                    "text=Procesar Imputación", "text=Procesar Imputacion"])
+    time.sleep(2)
+    for btn in ("Confirmar", "Aceptar", "ACEPTAR", "Si", "Sí"):
+        dismiss_pico_modal(win, rep, btn)
+    ok = wait_for_text(win, ["xitosa", "xito", "procesad", "Procesad", "correctamente",
+                             "satisfactoriamente"], timeout_s=60)
+    rep.attach(shot(ctx, win, rep, "26_imputacia_vysledok"))
+    if not ok:
+        # bez opakovania: imputácia mohla prebehnúť, retry by našiel prázdny zoznam
+        raise FatalError("Po 'Procesar Imputación' sa nezobrazil výsledok — imputácia MOHLA "
+                         "prebehnúť. Over screenshot 26 a Herramientas → Consulta de Estado de "
+                         f"Procesos de Imputación, potom spusti declarar --month {year}-{month:02d}.")
     marker.write_text(datetime.datetime.now().isoformat(), encoding="utf-8")
-    return f"imputované, súčet {format_gs(max(nums))} Gs"
+    return f"imputované ({check}; {obl}) — inconsistencias over v Herramientas → " \
+           "Consulta de Estado de Procesos de Imputación"
 
 
-def submit_form_120(ctx, page, year, month, base, iva, rep, dry_run):
-    """Krok 4 manuálu: Form 120 s NENULOVOU casillou 10 (rubro 1 inciso a).
+def casilla_input(form, num, timeout_each=2500):
+    """Input casilly Form 120 podľa čísla. Najprv struts názvy (c10 funguje pre
+    casillu 10), potom bunka s číslom casilly za nadpisom 'RUBRO 2'
+    (layout: <td>160</td><td><input></td>, viď screenshot Rubro 1)."""
+    scoped = "//*[contains(normalize-space(text()), 'RUBRO 2')]/following::"
+    return first_visible(form, [
+        f"input[name='c{num}']", f"input[id='c{num}']", f"input[name='casilla{num}']",
+        f"input[name='C{num}']",
+        f"xpath=({scoped}td[normalize-space(.)='{num}'])[1]/following-sibling::td[1]//input",
+        f"xpath=({scoped}*[normalize-space(text())='{num}'])[1]/following::input[1]",
+    ], timeout_each=timeout_each)
+
+
+def fill_rubro2(ctx, form, c160, rep):
+    """Rubro 2 Form 120 ('Enajenación … de los últimos seis (6) meses, incluido
+    el periodo que se declara') — vypĺňa poplatník, Marangatu ho nespočíta:
+      160 = súčet casilla 10 za 6 období; 161, 26 = 0 (5 % agro, exentas);
+      27 = 160+161+26; 162, 163, 29 = 0 (export); 30 = ich súčet; 31 = 27+30."""
+    loc, sel = casilla_input(form, 160, timeout_each=4000)
+    if loc is None:
+        shot(ctx, form, rep, "31e_rubro2_nenajdene")
+        manual_step(rep, f"Nenašiel som casillu 160 (Rubro 2) — vyplň 160 = {c160}, "
+                         f"161/26/162/163/29 = 0, 27 = 30 = 31 podľa súčtov "
+                         f"(27 = 31 = {c160}, 30 = 0); NEpodávaj")
+        if not wait_for_text(form, [format_gs(c160)], timeout_s=5):
+            raise FatalError(f"Rubro 2: hodnotu {format_gs(c160)} vo formulári nevidím — "
+                             "NIČ nepodávam.")
+        return "Rubro 2 vyplnené ručne (--interactive)"
+    loc.click()
+    loc.fill(str(c160))
+    form.keyboard.press("Tab")
+    rep.log(f"casilla 160 vyplnená: {c160} (selector: {sel})")
+    time.sleep(1)
+
+    expected = {161: 0, 26: 0, 162: 0, 163: 0, 29: 0}
+    for num, val in expected.items():
+        l, _ = casilla_input(form, num)
+        if l is None:
+            rep.log(f"casilla {num}: nenájdená — predpokladám 0")
+            continue
+        cur = l.input_value()
+        if parse_gs(cur) != val or not cur.strip():
+            if l.is_editable():
+                l.click()
+                l.fill(str(val))
+                form.keyboard.press("Tab")
+            elif parse_gs(cur) != val:
+                raise RuntimeError(f"casilla {num} = {cur}, čakal som {val} a nedá sa upraviť")
+
+    sums = {27: c160, 30: 0, 31: c160}
+    for num, val in sums.items():
+        l, _ = casilla_input(form, num)
+        if l is None:
+            if num == 30:
+                rep.log("casilla 30: nenájdená — predpokladám 0")
+                continue
+            shot(ctx, form, rep, f"31f_casilla{num}_nenajdena")
+            manual_step(rep, f"Nenašiel som casillu {num} — over/vyplň {num} = {val}; NEpodávaj")
+            continue
+        time.sleep(0.5)
+        if parse_gs(l.input_value()) != val:
+            if l.is_editable():
+                l.click()
+                l.fill(str(val))
+                form.keyboard.press("Tab")
+                time.sleep(0.5)
+            if parse_gs(l.input_value()) != val:
+                shot(ctx, form, rep, f"31g_casilla{num}_nesedi")
+                raise RuntimeError(f"Rubro 2: casilla {num} = {l.input_value()}, čakal som "
+                                   f"{format_gs(val)} — NIČ nepodávam, over screenshot 31g.")
+    # 160 nesmie prepísať prepočet formulára
+    if parse_gs(loc.input_value()) != c160:
+        raise RuntimeError(f"Rubro 2: casilla 160 = {loc.input_value()}, čakal som "
+                           f"{format_gs(c160)} — NIČ nepodávam.")
+    rep.log(f"Rubro 2 OK: 160 = 27 = 31 = {format_gs(c160)}, ostatné 0", report=True)
+    return f"Rubro 2: 160 = 27 = 31 = {format_gs(c160)}"
+
+
+def submit_form_120(ctx, page, year, month, base, iva, c160, rep, dry_run):
+    """Krok 4 manuálu: Form 120 s NENULOVOU casillou 10 (rubro 1 inciso a)
+    a vyplneným Rubro 2 (casilla 160 = 6-mesačný kumulatív, 27 a 31 = súčty).
     Pred podaním sa overí, že portál dopočítal IVA débito = base × 10 %."""
-    rep.log(f"Form 120: obdobie {month:02d}/{year}, casilla 10 = {format_gs(base)}")
+    rep.log(f"Form 120: obdobie {month:02d}/{year}, casilla 10 = {format_gs(base)}, "
+            f"casilla 160 = {format_gs(c160)}")
     href = page.locator("a[href*='recibirDDJJContribuyente.do']").first.get_attribute("href")
     if not href:
         raise RuntimeError("Na dashboarde nie je odkaz recibirDDJJContribuyente.do")
@@ -825,6 +1339,12 @@ def submit_form_120(ctx, page, year, month, base, iva, rep, dry_run):
         shot(ctx, form, rep, "31d_iva_nedopocitane")
         raise RuntimeError(f"Form 120 nedopočítal IVA débito {format_gs(iva)} — zle vyplnená "
                            "casilla? NIČ nepodávam, over screenshot 31d.")
+
+    rubro2 = fill_rubro2(ctx, form, c160, rep)
+    # casilla 10 sa nesmela zmeniť prepočtom
+    if parse_gs(casilla.input_value()) != base:
+        raise RuntimeError(f"casilla 10 = {casilla.input_value()}, čakal som {format_gs(base)} "
+                           "— NIČ nepodávam.")
     shot(ctx, form, rep, "32_form120_vyplneny")
 
     form.keyboard.press("End")
@@ -836,8 +1356,10 @@ def submit_form_120(ctx, page, year, month, base, iva, rep, dry_run):
             form.close()
         except Exception:
             pass
-        return "DRY-RUN (nepodané)"
+        return f"DRY-RUN (nepodané; {rubro2})"
 
+    confirm_irreversible(rep, f"podať Form 120 za {month:02d}/{year} "
+                              f"(casilla 10 = {format_gs(base)}, 160 = {format_gs(c160)})")
     form.click("button:has-text('Presentar Declaración')")
     time.sleep(2)
     form.locator("div[class*='pico'] button:has-text('Presentar Declaración')").last.click(timeout=20000)
@@ -859,6 +1381,11 @@ def submit_form_120(ctx, page, year, month, base, iva, rep, dry_run):
         detail += f" | doc: {nums[0]}"
     if ctrl:
         detail += f" | control: {ctrl[0]}"
+    detail += f" | {rubro2}"
+    # záznam pre Rubro 2 nasledujúcich období
+    form120_state_file(f"{year}-{month:02d}").write_text(json.dumps(
+        {"period": f"{year}-{month:02d}", "c10": base, "c22": iva, "c160": c160,
+         "filed": datetime.date.today().isoformat()}, indent=2), encoding="utf-8")
     try:
         form.close()
     except Exception:
@@ -909,6 +1436,7 @@ def submit_form_241(ctx, page, year, month, rep, dry_run):
         rep.log("DRY-RUN: preskakujem klik 'Presentar declaración' vo Form 241", report=True)
         return "DRY-RUN (nepodané)"
 
+    confirm_irreversible(rep, f"podať talón Form 241 za {month:02d}/{year}")
     click_any(talon, ["button:has-text('Presentar declaración')",
                       "text=Presentar declaración"])
     time.sleep(2)
@@ -959,6 +1487,33 @@ def generar_boleta(ctx, page, rep, dry_run):
                 "(manuál krok 9: hľadaj BOLETA → Generar Boleta Pago) a zaplať v bankovej appke")
 
 
+def report_deadline(cfg, creds, year, month, rep):
+    """Termín podania + platby za obdobie (calendario perpetuo DNIT)."""
+    ruc = taxpayer_ruc(cfg, creds)
+    due = due_date(year, month, ruc, cfg.get("HOLIDAYS"))
+    today = datetime.date.today()
+    txt = (f"{due.isoformat()} ({['po','ut','st','št','pi','so','ne'][due.weekday()]}; "
+           f"RUC končí na {ruc[-1]} → {DUE_DAY_BY_DIGIT[int(ruc[-1])]}. deň, víkend/sviatok "
+           "→ ďalší pracovný deň) — priznanie AJ platba IVA")
+    rep.log(f"termín za {month:02d}/{year}: {txt}", report=True)
+    if today > due:
+        rep.log(f"POZOR: termín {due.isoformat()} UŽ UPLYNUL — podávam oneskorene, "
+                "počítaj s multou a recargos za omeškanie", report=True)
+    elif today == due:
+        rep.log("POZOR: dnes je posledný deň na podanie AJ zaplatenie", report=True)
+    return txt
+
+
+def cmd_vencimiento(creds, cfg, year, month):
+    """Offline: vypíše termín podania/platby (bez prihlásenia do portálu)."""
+    ruc = taxpayer_ruc(cfg, creds)
+    due = due_date(year, month, ruc, cfg.get("HOLIDAYS"))
+    print(f"obdobie {year}-{month:02d}, RUC …{ruc[-1]}: Form 120 podať a IVA zaplatiť "
+          f"do {due.isoformat()} ({MESES[due.month - 1]}, "
+          f"{['pondelok','utorok','streda','štvrtok','piatok','sobota','nedeľa'][due.weekday()]})")
+    return 0
+
+
 def cmd_declarar(creds, cfg, rep, args, year, month):
     from playwright.sync_api import sync_playwright
     period = f"{year}-{month:02d}"
@@ -985,6 +1540,10 @@ def cmd_declarar(creds, cfg, rep, args, year, month):
     base = gross - iva
 
     results = {"suma": f"brutto {format_gs(gross)} Gs = báza {format_gs(base)} + IVA {format_gs(iva)}"}
+    results["vencimiento"] = report_deadline(cfg, creds, year, month, rep)
+    # Rubro 2 sa počíta PRED prihlásením — chýbajúca história zastaví beh skôr,
+    # než sa čokoľvek imputuje
+    c160 = compute_rubro2(cfg, year, month, base, rep, args.dry_run)
     with sync_playwright() as p:
         browser, ctx = launch_context(p, cfg, rep)
         page = ctx.new_page()
@@ -995,7 +1554,7 @@ def cmd_declarar(creds, cfg, rep, args, year, month):
             rep.log(f"Próximos Vencimientos: {venc[:250] or '(prázdne)'}")
             results["vencimientos_pred"] = venc[:250] or "(prázdne)"
 
-            results["imputacion"] = imputar_ventas(ctx, page, year, month, gross,
+            results["imputacion"] = imputar_ventas(ctx, page, year, month, gross, cfg,
                                                    rep, args.dry_run)
 
             page.goto(PORTAL, wait_until="domcontentloaded", timeout=60000)
@@ -1003,7 +1562,7 @@ def cmd_declarar(creds, cfg, rep, args, year, month):
             iva_pending = ("IVA" in venc.upper()) or ("211" in venc)
             if iva_pending:
                 results["form120"] = submit_form_120(ctx, page, year, month, base, iva,
-                                                     rep, args.dry_run)
+                                                     c160, rep, args.dry_run)
             else:
                 results["form120"] = ("nepodávané — IVA nie je v Próximos Vencimientos "
                                       "(pravdepodobne už podané)")
@@ -1029,8 +1588,69 @@ def cmd_declarar(creds, cfg, rep, args, year, month):
 
 # ---------------------------------------------------------------- DOCUMENTOS
 
+# len odkazy, ktoré vyzerajú ako stiahnutie/zobrazenie — nikdy nie akcie
+DL_HINT = re.compile(r"descarg|imprim|pdf|ver\b|visualiz|download|consult", re.I)
+DL_DENY = re.compile(r"presentar|pagar|rectific|anular|eliminar|confirmar|generar|borrar", re.I)
+
+
+def download_recent_form120(ctx, page, outdir, rep, want=3):
+    """Krok 6 manuálu: úvodná stránka ukazuje posledné FORM 120 na stiahnutie;
+    DNM chce posledné tri. Zoznam nemáme overený na živom DOM → best-effort:
+    v riadkoch s '120' klikáme LEN na odkazy, ktoré vyzerajú ako stiahnutie
+    (text/title/ikona descargar/imprimir/pdf), nikdy na Presentar/Pagar…"""
+    try:
+        shot(ctx, page, rep, "65_dashboard_declaraciones")
+        rows = page.locator("tr").filter(has_text=re.compile(r"\b120\b"))
+        got = 0
+        for i in range(min(rows.count(), 8)):
+            if got >= want:
+                break
+            row = rows.nth(i)
+            try:
+                rtext = " ".join(row.inner_text(timeout=3000).split())
+            except Exception:
+                continue
+            tag = "_".join(re.findall(r"\d{2}/\d{4}|\d{4}-\d{2}", rtext))[:30].replace("/", "-")
+            dest = outdir / f"form120_{got + 1}{'_' + tag if tag else ''}.pdf"
+            links = row.locator("a, button")
+            for j in range(links.count()):
+                el = links.nth(j)
+                try:
+                    hint = " ".join(filter(None, [
+                        el.inner_text(timeout=2000), el.get_attribute("title"),
+                        el.get_attribute("href"), el.get_attribute("class"),
+                        el.locator("i, span").first.get_attribute("class")
+                        if el.locator("i, span").count() else ""]))
+                except Exception:
+                    continue
+                if DL_DENY.search(hint) or not DL_HINT.search(hint):
+                    continue
+                before = set(ctx.pages)
+                try:
+                    with page.expect_download(timeout=30000) as dl_info:
+                        el.click(timeout=10000)
+                    dl_info.value.save_as(str(dest))
+                    rep.log(f"stiahnuté: {dest} ({rtext[:80]})")
+                    got += 1
+                    break
+                except Exception:
+                    # PDF sa mohlo otvoriť v novom okne — screenshot a zavrieť
+                    for extra in ctx.pages:
+                        if extra not in before:
+                            rep.attach(shot(ctx, extra, rep, f"66_form120_okno_{i}"))
+                            try:
+                                extra.close()
+                            except Exception:
+                                pass
+        return (f"{got} PDF stiahnutých do {outdir}" if got else
+                "nestiahnuté automaticky — stiahni posledné 3 FORM 120 ručne z úvodnej "
+                "stránky (manuál krok 6), over screenshot 65")
+    except Exception as e:
+        return f"ZLYHALO: {e} — stiahni ručne (manuál krok 6)"
+
+
 def cmd_documentos(creds, cfg, rep, args):
-    """Kroky 7-8 manuálu — podklady k žiadosti o rezidenciu. Všetko best-effort:
+    """Kroky 6-8 manuálu — podklady k žiadosti o rezidenciu. Všetko best-effort:
     každý dokument sa skúsi, zlyhanie jedného nezhodí ostatné."""
     from playwright.sync_api import sync_playwright
     outdir = DOCS_DIR / datetime.date.today().isoformat()
@@ -1042,6 +1662,11 @@ def cmd_documentos(creds, cfg, rep, args):
         page.set_default_timeout(45000)
         try:
             login(ctx, page, creds, rep)
+
+            # 6. posledné priznania IVA (FORM 120) z úvodnej stránky
+            results["form120"] = download_recent_form120(ctx, page, outdir, rep)
+            page.goto(PORTAL, wait_until="domcontentloaded", timeout=60000)
+            time.sleep(3)
 
             # 7. certificado de cumplimiento tributario (len ak nič nedlhuješ)
             try:
@@ -1140,7 +1765,8 @@ def build_body(cmd, period, results, rep, dry_run, run_dir):
             v = ", ".join(f"{a}={b}" for a, b in v.items())
         lines.append(f"{k}: {v}")
     if cmd == "declarar" and not dry_run:
-        lines += ["", "!!! NEZABUDNI: IVA treba ZAPLATIŤ cez bankovú appku "
+        due = results.get("vencimiento", "").split(" ")[0] or "termínu podľa RUC"
+        lines += ["", f"!!! NEZABUDNI: IVA treba ZAPLATIŤ do {due} cez bankovú appku "
                       "(Pagar servicios → DNIT, cédula/RUC + dátum narodenia) — "
                       "certificado de cumplimiento sa bez zaplatenia nedá vygenerovať."]
     lines += ["", f"Log + screenshoty: {host_hint}"]
@@ -1150,8 +1776,10 @@ def build_body(cmd, period, results, rep, dry_run, run_dir):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["facturar", "declarar", "documentos"])
-    ap.add_argument("--month", help="obdobie YYYY-MM (len declarar; default: minulý mesiac)")
+    global INTERACTIVE
+    ap.add_argument("cmd", choices=["facturar", "declarar", "documentos", "vencimiento"])
+    ap.add_argument("--month", help="obdobie YYYY-MM (declarar/vencimiento; "
+                                    "default: minulý mesiac)")
     ap.add_argument("--amount-gs", type=int,
                     help="brutto suma faktúry v Gs (facturar: namiesto výpočtu z USD; "
                          "declarar: fallback, ak chýba marker faktúry)")
@@ -1164,9 +1792,32 @@ def main():
     ap.add_argument("--only-if-not-done", action="store_true",
                     help="skonči potichu, ak už obdobie má marker (záložný cron)")
     ap.add_argument("--retries", type=int, default=RETRIES)
+    ap.add_argument("--interactive", action="store_true",
+                    help="viditeľný prehliadač; y/N pred každým nevratným klikom a ručný "
+                         "zásah na obrazovkách, ktoré skript nevie spoľahlivo obslúžiť "
+                         "(odporúčané pre prvý ostrý beh; nie pre cron)")
     args = ap.parse_args()
+    if args.interactive:
+        if not sys.stdin.isatty():
+            print("CHYBA: --interactive potrebuje terminál (nie cron)", file=sys.stderr)
+            return 1
+        INTERACTIVE = True
+        args.retries = 1
 
     today = datetime.date.today()
+    if args.cmd == "vencimiento":
+        try:
+            cfg = load_config()
+            creds = load_kv_file(CRED_FILE)
+            if args.month:
+                y, m = (int(x) for x in args.month.split("-"))
+            else:
+                y, m = previous_month(today)
+            return cmd_vencimiento(creds, cfg, y, m)
+        except FatalError as e:
+            print(f"CHYBA: {e}", file=sys.stderr)
+            return 1
+
     if args.cmd == "facturar":
         # faktúru nemožno antedatovať — vždy patrí do aktuálneho mesiaca
         period = f"{today.year}-{today.month:02d}"
